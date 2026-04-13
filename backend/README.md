@@ -1,0 +1,16 @@
+# PROJECT STRUCTURE
+- smart_campus_booking/
+  - core/
+    - config.py: connect database
+    - database.py
+    - security.py
+  - schemas/
+  - models/
+  - dependencies/
+  - repositories/
+  - routers/
+  - services/
+  - shared/
+    - constants.py
+    - exceptions.py
+    - utils.py

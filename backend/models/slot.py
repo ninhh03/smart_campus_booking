@@ -1,19 +1,22 @@
-from sqlalchemy import (Column,BigInteger,String,Integer,Boolean,Time,DateTime,Index,text,CheckConstraint)
+from sqlalchemy import Column, ForeignKey, CheckConstraint, UniqueConstraint, String, Text, text, Boolean, BigInteger, Integer, DateTime, Date, Time
+from sqlalchemy.sql import func
 from models.base import Base
 
 class Slot(Base):
     __tablename__ = "slots"
     __table_args__ = (
-        Index("idx_slots_order", "order_index"),
-        Index("idx_slots_active", "is_active"),
-        CheckConstraint("end_time > start_time", name="ck_slot_time"),
+        CheckConstraint("order_index > 0", name="cc_slots_order_index"),
+        CheckConstraint("status IN ('active', 'inactive')", name="cc_slots_status"),
+        CheckConstraint("end_time > start_time", name="cc_slots_start_time_end_time"),
+        UniqueConstraint("start_time", "end_time", name="uc_slots_start_time_end_time"),
     )
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    name = Column(String(100), nullable=False)
+    id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True)
+    name = Column(String(50), nullable=False, unique=True)
     order_index = Column(Integer, nullable=False, unique=True)
-    is_active = Column(Boolean, server_default=text("TRUE"))
+    status = Column(String(50), nullable=False, server_default=text("'active'"))
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
-    created_at = Column(DateTime,server_default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(DateTime,server_default=text("CURRENT_TIMESTAMP"),onupdate=text("CURRENT_TIMESTAMP"))
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime, nullable=True)

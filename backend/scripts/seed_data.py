@@ -1,458 +1,343 @@
 import asyncio
-from sqlalchemy import select, func
-from datetime import date, datetime, timedelta, time
-from faker import Faker
-import random
-import json
 from core.database import AsyncSessionLocal
+from models import User, Room, Equipment, RoomEquipment, Slot, Booking, Ticket, AILog
+from faker import Faker
+from sqlalchemy import select, func
 from shared.utils import hash_password
-from models import Base, User, Room, Equipment, RoomEquipment, Slot, Booking, Ticket, AILog, RefreshToken
+import random
+from unidecode import unidecode
+from datetime import timedelta, date, time, datetime
+import json
 
 fake = Faker("vi_VN")
 
 async def seed_users(session):
     count = (await session.execute(select(func.count(User.id)))).scalar()
     if count and count > 0:
-        print(f"Đã có ({count} users) người dùng")
         return
     users_to_add = []
-    user_groups = [
-        {"count": 2, "prefix": "ADMIN", "role": "admin", "password": "Admin@123456", "email_suffix": "smartcampus.edu.vn"},
-        {"count": 23, "prefix": "LEC", "role": "lecturer", "password": "Lec@123456", "email_suffix": "smartcampus.edu.vn"},
-        {"count": 100, "prefix": "SV", "role": "student", "password": "Student@123456", "email_suffix": "student.edu.vn"}
+    users_group = [
+        {"quantity": 2, "prefix": "ADM", "role": "admin", "password_hash": "adm@123", "email_domain": "@adm.scb.edu.vn"},
+        {"quantity": 20, "prefix": "LEC", "role": "lecturer", "password_hash": "lec@123", "email_domain": "@lec.scb.edu.vn"},
+        {"quantity": 200, "prefix": "STU", "role": "student", "password_hash": "stu@123", "email_domain": "@stu.scb.edu.vn"}
     ]
-    for group in user_groups:
-        if group["role"] == "student":
-            min_age, max_age = 18, 22
-        elif group["role"] == "admin":
-            min_age, max_age = 25, 40
-        else:
-            min_age, max_age = 30, 60
-        for i in range(1, group["count"] + 1):
-            gender = random.choice(["Nam", "Nữ"])
-            if gender == "Nam":
+    for group in users_group:
+        for i in range(group["quantity"]):
+            external_id = f"{group['prefix']}2026{str(i).zfill(4)}"
+            gender = random.choice(["male", "female"])
+            if gender == "male":
                 first_name = fake.first_name_male()
-                # Faker vi_VN thường dùng prefix cho các từ như 'Văn', 'Hữu', 'Đình'
-                middle_name = random.choice(["Văn", "Hữu", "Đình", "Quang", "Minh"]) 
+                middle_name = random.choice(["Văn", "Hữu", "Đình", "Quang", "Minh"])
                 last_name = fake.last_name_male()
             else:
                 first_name = fake.first_name_female()
-                middle_name = "Thị" # Hoặc random.choice(["Thị", "Ngọc", "Kiều"])
+                middle_name = random.choice(["Lan", "Nhã", "Như", "Khánh", "Diệu"])
                 last_name = fake.last_name_female()
             full_name = f"{last_name} {middle_name} {first_name}"
+            if(group["role"] == "student"): min_age, max_age = 18, 22
+            elif(group["role"] == "admin"): min_age, max_age = 25, 40
+            else: min_age, max_age = 30, 60
+            date_of_birth = fake.date_of_birth(minimum_age=min_age, maximum_age=max_age)
+            phone = fake.numerify(text="0#########")
+            email_name = unidecode(full_name).replace(" ", "").lower()
+            email = f"{email_name}{i}{group['email_domain']}"
+            graduation_date = None
             if group["role"] == "student":
-                year = 2020 + random.randint(0, 4)
-                external_id = f"{group['prefix']}{year}{i:04d}"
-            else:
-                external_id = f"{group['prefix']}{i:03d}"
-            users_to_add.append(User(
-                external_id=external_id,
-                full_name=full_name,
-                gender=gender,
-                role=group["role"],
-                date_of_birth=fake.date_of_birth(minimum_age=min_age, maximum_age=max_age),
-                email=f"{group['role']}{i}_{random.randint(100, 999)}@{group['email_suffix']}",
-                phone=f"0{random.randint(300000000, 999999999)}",
-                password_hash=hash_password(group["password"]),
-                is_active=True,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
-            ))
+                is_graduated = random.random() < 0.3
+                if is_graduated:
+                    graduation_date = date_of_birth + timedelta(days=(22 * 365) + random.randint(0, 180))
+                    if graduation_date > date.today():
+                        graduation_date = date.today()
+            last_login_at = None
+            new_user = User(
+                external_id = external_id,
+                full_name = full_name,
+                gender = gender,
+                date_of_birth = date_of_birth,
+                phone = phone,
+                email = email,
+                graduation_date = graduation_date,
+                last_login_at = last_login_at,
+                password_hash = hash_password(group["password_hash"]),
+                role = group["role"]
+            )
+            users_to_add.append(new_user)
     session.add_all(users_to_add)
     await session.commit()
 async def seed_rooms(session):
     count = (await session.execute(select(func.count(Room.id)))).scalar()
     if count and count > 0:
-        print(f"Dữ liệu phòng đã tồn tại ({count} rooms). Bỏ qua bước seed.")
         return
     rooms_to_add = []
-    buildings = {
-        "A": {"floors": 5, "rooms_per_floor": 4, "type": "class", "base_capacity": 50},
-        "B": {"floors": 3, "rooms_per_floor": 3, "type": "lab", "base_capacity": 30},
-        "C": {"floors": 2, "rooms_per_floor": 2, "type": "sport", "base_capacity": 100}
-    }
-    status_options = ["available", "maintenance", "inactive"]
-    for b_name, config in buildings.items():
-        building_label = f"Tòa {b_name}"
-        for floor in range(1, config["floors"] + 1):
-            for r_idx in range(1, config["rooms_per_floor"] + 1):
-                room_number = f"{b_name}{floor}{r_idx:02d}"
-                capacity = config["base_capacity"] + random.choice([-10, -5, 0, 5, 10, 20])
-                status = random.choices(status_options, weights=[80, 15, 5], k=1)[0]
-                rooms_to_add.append(
-                    Room(
-                        room_number=room_number,
-                        name=f"Phòng {config['type'].upper()} {room_number}",
-                        type=config["type"],
-                        status=status,
-                        capacity=capacity,
-                        floor=floor,
-                        building=building_label,
-                        created_at=datetime.now(),
-                        updated_at=datetime.now()
-                    )
-                )
+    rooms_group = [
+        {"quantity": 200, "prefix": "CLA", "type": "class", "base_capacity": 40, "buildings": ["A", "B", "C"]},
+        {"quantity": 50, "prefix": "LAB", "type": "lab", "base_capacity": 50, "buildings": ["D", "E"]},
+        {"quantity": 3, "prefix": "SPO", "type": "sport", "base_capacity": 500, "buildings": ["E"]}
+    ]
+    building_floors = {"A": 7, "B": 5, "C": 5, "D": 5, "E": 5}
+    for group in rooms_group:
+        for i in range(group["quantity"]):
+            type = group["type"]
+            capacity = group["base_capacity"] + random.choice([0, 10, 20, 30, 40, 50])
+            room_number = f"{i + 1:04d}"
+            building = random.choice(group["buildings"])
+            floor = str(random.randint(1, building_floors[building]))
+            name = f"{group['prefix']}-{building}-{room_number}"
+            deleted_at = None
+            new_room = Room(
+                name = name,
+                type = type,
+                capacity = capacity,
+                room_number = room_number,
+                floor = floor,
+                building = building,
+                deleted_at = deleted_at
+            )
+            rooms_to_add.append(new_room)
     session.add_all(rooms_to_add)
     await session.commit()
 async def seed_equipments(session):
     count = (await session.execute(select(func.count(Equipment.id)))).scalar()
     if count and count > 0:
-        print(f"Dữ liệu phòng đã tồn tại ({count} rooms). Bỏ qua bước seed.")
         return
     equipments_to_add = []
-    equipment_meta = {
-        "projector": {
-            "prefix": "PROJ", "name": "Máy chiếu", "count": 20,
-            "brands": ["Panasonic", "Sony", "Epson", "ViewSonic"],
-            "specs": ["Độ phân giải 4K", "Cổng kết nối HDMI/VGA", "Độ sáng 4000 Lumens"]
-        },
-        "ac": {
-            "prefix": "AC", "name": "Điều hòa", "count": 40,
-            "brands": ["Daikin", "Panasonic", "LG", "Samsung"],
-            "specs": ["Inverter tiết kiệm điện", "Công suất 18000 BTU", "Khử khuẩn Nano"]
-        },
-        "computer": {
-            "prefix": "COMP", "name": "Máy tính", "count": 100,
-            "brands": ["Dell", "HP", "Lenovo", "Asus"],
-            "specs": ["CPU Core i7", "RAM 16GB", "SSD 512GB", "Monitor 24 inch"]
-        },
-        "speaker": {
-            "prefix": "SPK", "name": "Loa âm trần", "count": 30,
-            "brands": ["Bose", "JBL", "TOA", "Yamaha"],
-            "specs": ["Công suất 30W", "Tần số 80Hz-20kHz", "Độ nhạy 90dB"]
-        }
-    }
-    status_options = ["active", "maintenance", "broken"]
-    status_weights = [85, 10, 5]
-    for e_type, config in equipment_meta.items():
-        for i in range(1, config["count"] + 1):
-            code = f"{config['prefix']}-{i:03d}"
-            status = random.choices(status_options, weights=status_weights, k=1)[0]
-            brand = random.choice(config["brands"])
-            spec = random.choice(config["specs"])
-            usage_steps = [
-                f"Bước 1: Kiểm tra nguồn điện và cáp kết nối của {config['name']}.",
-                f"Bước 2: Nhấn nút nguồn trên thiết bị hoặc điều khiển từ xa.",
-                f"Bước 3: Chọn nguồn tín hiệu đầu vào (Input) phù hợp.",
-                f"Bước 4: Điều chỉnh thông số {spec.lower()} để đạt hiệu quả tốt nhất.",
-                f"Lưu ý: Nếu có sự cố, hãy báo ngay cho kỹ thuật qua mã {code}."
-            ]
-            equipments_to_add.append(
-                Equipment(
-                    name=f"{config['name']} {brand} {i:03d}",
-                    code=code,
-                    type=e_type,
-                    status=status,
-                    description=(
-                        f"Thiết bị: {config['name']}. Thương hiệu: {brand}. "
-                        f"Model: {fake.bothify('??-####').upper()}. "
-                        f"Thông số: {spec}. Tình trạng vật lý: {fake.word()}."
-                    ),
-                    usage_guide="\n".join(usage_steps),
-                    qr_code=f"https://smartcampus.edu.vn/qr/{code}",
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
-                )
+    equipments_group = [
+        {"quantity": 200, "prefix": "PRO", "base_name": "Máy chiếu", "type": "projector", "description": "Máy chiếu độ phân giải Full HD, hỗ trợ kết nối HDMI/VGA.", "usage_guide": "1. Không đứng lên ghế. 2. Không để vật sắc nhọn làm rách đệm. 3. Xếp gọn lại sau khi sử dụng."},
+        {"quantity": 200, "prefix": "AC", "base_name": "Điều hoà", "type": "ac", "description": "Điều hòa công suất 18.000 BTU, chế độ làm lạnh nhanh Inverter.", "usage_guide": "1. Sử dụng điều khiển để bật/tắt. 2. Để nhiệt độ lý tưởng 24-26°C. 3. Đóng kín cửa sổ và cửa ra vào."},
+        {"quantity": 200, "prefix": "CHA", "base_name": "Ghế", "type": "chair", "description": "Ghế tựa khung thép, đệm bọc da simili cao cấp.", "usage_guide": "1. Không đứng lên ghế. 2. Không để vật sắc nhọn làm rách đệm. 3. Xếp gọn lại sau khi sử dụng."},
+        {"quantity": 200, "prefix": "TAB", "base_name": "Bàn học", "type": "table", "description": "Bàn học gỗ công nghiệp, kích thước tiêu chuẩn cho 2 người.", "usage_guide": "1. Không vẽ bẩn lên mặt bàn. 2. Tránh để nước đọng lâu trên bề mặt gỗ. 3. Không ngồi lên bàn."},
+        {"quantity": 200, "prefix": "BOA", "base_name": "Bảng", "type": "board", "description": "Bảng từ trắng chống lóa, dùng cho bút dạ và nam châm.", "usage_guide": "1. Chỉ sử dụng bút dạ chuyên dụng. 2. Dùng khăn mềm để lau bảng. 3. Không dùng vật cứng cào mặt bảng."},
+        {"quantity": 100, "prefix": "COM", "base_name": "Máy tính", "type": "computer", "description": "Máy tính để bàn cấu hình Core i5, RAM 16GB dùng cho thực hành.", "usage_guide": "1. Nhấn nút nguồn trên case. 2. Đăng nhập bằng tài khoản sinh viên. 3. Shutdown máy trước khi rời phòng."},
+        {"quantity": 200, "prefix": "SPE", "base_name": "Loa", "type": "speaker", "description": "Hệ thống loa gắn tường công suất 30W, âm thanh rõ nét.", "usage_guide": "1. Kết nối qua cổng AUX hoặc Bluetooth tại bảng điều khiển. 2. Điều chỉnh âm lượng vừa đủ nghe. 3. Tắt nguồn sau khi sử dụng."},
+    ]
+    for group in equipments_group:
+        for i in range(group["quantity"]):
+            name = f"{group['base_name']} {i + 1:04d}"
+            type = group["type"]
+            description = group["description"]
+            usage_guide = group["usage_guide"]
+            code = f"{group['prefix']}2026{i + 1:04d}"
+            qr_code = f"https://smartcampus.edu.vn/qr/{code}"
+            new_equipment = Equipment(
+                name = name,
+                type = type,
+                description = description,
+                usage_guide = usage_guide,
+                code = code,
+                qr_code = qr_code
             )
+            equipments_to_add.append(new_equipment)
     session.add_all(equipments_to_add)
     await session.commit()
-async def seed_room_equipments(session):
-    count = (await session.execute(select(func.count(Equipment.id)))).scalar()
+async def seed_rooms_equipments(session):
+    count = (await session.execute(select(func.count(RoomEquipment.id)))).scalar()
     if count and count > 0:
-        print(f"Dữ liệu phòng đã tồn tại ({count} rooms). Bỏ qua bước seed.")
         return
-    rooms_res = await session.execute(select(Room.id, Room.type))
-    rooms = rooms_res.all()
-    equips_res = await session.execute(select(Equipment.id, Equipment.type))
-    all_equips = equips_res.all()
-    equips_by_type = {}
-    for e_id, e_type in all_equips:
-        if e_type not in equips_by_type:
-            equips_by_type[e_type] = []
-        equips_by_type[e_type].append(e_id)
-    room_equipments_to_add = []
-    used_equip_ids = set()
-    for r_id, r_type in rooms:
-        needed_types = []
-        if r_type == "class":
-            needed_types = ["projector", "ac", "speaker"]
-        elif r_type == "lab":
-            needed_types = ["projector", "ac", "computer", "speaker"]
-        elif r_type == "sport":
-            needed_types = ["ac", "speaker"]
-        for t in needed_types:
-            if t in equips_by_type:
-                available = [eid for eid in equips_by_type[t] if eid not in used_equip_ids]
-                if not available:
-                    continue
-                if t == "computer" and r_type == "lab":
-                    num_comp = random.randint(5, 10)
-                    to_assign = available[:num_comp]
-                    for eid in to_assign:
-                        # Nội dung note thật hơn để AI học vị trí và tình trạng
-                        note = f"Vị trí bàn {random.randint(1, 10)}, dãy {random.choice(['A', 'B', 'C'])}. Tình trạng: {random.choice(['Tốt', 'Mới', 'Ổn định'])}."
-                        room_equipments_to_add.append(RoomEquipment(room_id=r_id, equipment_id=eid, note=note))
-                        used_equip_ids.add(eid)
-                else:
-                    eid = random.choice(available)
-                    pos = "Góc tường" if t == "ac" else "Trần nhà" if t in ["projector", "speaker"] else "Bục giảng"
-                    note = f"Lắp đặt tại {pos}. Kiểm tra lần cuối: {fake.date_this_year().strftime('%d/%m/%Y')}."
-                    room_equipments_to_add.append(RoomEquipment(room_id=r_id, equipment_id=eid, note=note))
-                    used_equip_ids.add(eid)
-    if room_equipments_to_add:
-        session.add_all(room_equipments_to_add)
-        await session.commit()
-        print(f"Successfully assigned {len(room_equipments_to_add)} equipments to existing rooms")
-    else:
-        print("No assignments created. Check if Equipment and Room data exist")
+    rooms_equipments_to_add = []
+    rooms_result = await session.execute(select(Room.id))
+    room_ids = [r[0] for r in rooms_result.all()]
+    equipments_result = await session.execute(select(Equipment.id))
+    equipment_ids = [e[0] for e in equipments_result.all()]
+    random.shuffle(equipment_ids)
+    num_rooms = len(room_ids)
+    for i, equipment_id in enumerate(equipment_ids):
+        room_id = room_ids[i % num_rooms]
+        new_room_equipment = RoomEquipment(
+            room_id = room_id,
+            equipment_id = equipment_id
+        )
+        rooms_equipments_to_add.append(new_room_equipment)
+    session.add_all(rooms_equipments_to_add)
+    await session.commit()
 async def seed_slots(session):
     count = (await session.execute(select(func.count(Slot.id)))).scalar()
     if count and count > 0:
-        print(f"Dữ liệu phòng đã tồn tại ({count} rooms). Bỏ qua bước seed.")
         return
-    slot_configs = [
-        {"name": "Tiết 1", "start": "07:00", "end": "07:50"},
-        {"name": "Tiết 2", "start": "08:00", "end": "08:50"},
-        {"name": "Tiết 3", "start": "09:00", "end": "09:50"},
-        {"name": "Tiết 4", "start": "10:00", "end": "10:50"},
-        {"name": "Tiết 5", "start": "11:00", "end": "11:50"},
-        {"name": "Tiết 6", "start": "12:00", "end": "12:50"},
-        {"name": "Tiết 7", "start": "13:00", "end": "13:50"},
-        {"name": "Tiết 8", "start": "14:00", "end": "14:50"},
-        {"name": "Tiết 9", "start": "15:00", "end": "15:50"},
-        {"name": "Tiết 10", "start": "16:00", "end": "16:50"},
-        {"name": "Tiết 11", "start": "17:00", "end": "17:50"},
-        {"name": "Tiết 12", "start": "18:00", "end": "18:50"},
-    ]
     slots_to_add = []
-    for i, config in enumerate(slot_configs, start=1):
-        sh, sm = [int(t) for t in config["start"].split(":")]
-        eh, em = [int(t) for t in config["end"].split(":")]
-        slots_to_add.append(
-            Slot(
-                name=config["name"],
-                order_index=i, 
-                start_time=time(sh, sm),
-                end_time=time(eh, em),
-                is_active=True
-            )
+    slots_group = [
+        {"name": "Tiết 01", "order_index": 1, "start_time": time(7, 30), "end_time": time(8, 15)},
+        {"name": "Tiết 02", "order_index": 2, "start_time": time(8, 20), "end_time": time(9, 5)},
+        {"name": "Tiết 03", "order_index": 3, "start_time": time(9, 15), "end_time": time(10, 0)},
+        {"name": "Tiết 04", "order_index": 4, "start_time": time(10, 5), "end_time": time(10, 50)},
+        {"name": "Tiết 05", "order_index": 5, "start_time": time(11, 0), "end_time": time(11, 45)},
+        {"name": "Tiết 06", "order_index": 6, "start_time": time(11, 50), "end_time": time(12, 35)},
+        {"name": "Tiết 07", "order_index": 7, "start_time": time(13, 30), "end_time": time(14, 15)},
+        {"name": "Tiết 08", "order_index": 8, "start_time": time(14, 20), "end_time": time(15, 5)},
+        {"name": "Tiết 09", "order_index": 9, "start_time": time(15, 15), "end_time": time(16, 0)},
+        {"name": "Tiết 10", "order_index": 10, "start_time": time(16, 5), "end_time": time(16, 50)},
+        {"name": "Tiết 11", "order_index": 11, "start_time": time(17, 0), "end_time": time(17, 45)},
+        {"name": "Tiết 12", "order_index": 12, "start_time": time(17, 50), "end_time": time(18, 35)},
+    ]
+    for group in slots_group:
+        name = group["name"]
+        order_index = group["order_index"]
+        start_time = group["start_time"]
+        end_time = group["end_time"]
+        deleted_at = None
+        new_slot = Slot(
+            name = name,
+            order_index = order_index,
+            start_time = start_time,
+            end_time = end_time,
+            deleted_at = deleted_at
         )
+        slots_to_add.append(new_slot)
     session.add_all(slots_to_add)
     await session.commit()
 async def seed_bookings(session):
     count = (await session.execute(select(func.count(Booking.id)))).scalar()
     if count and count > 0:
-        print(f"Dữ liệu phòng đã tồn tại ({count} rooms). Bỏ qua bước seed.")
         return
-    users_res = await session.execute(select(User.id, User.role).where(User.role != 'admin'))
-    users_data = users_res.all() # Danh sách tuple (id, role)
-    user_ids = [u[0] for u in users_data]
-    admin_res = await session.execute(select(User.id).where(User.role == 'admin'))
-    admin_ids = [r[0] for r in admin_res.all()]
-    rooms_res = await session.execute(select(Room.id))
-    room_ids = [r[0] for r in rooms_res.all()]
-    slots_res = await session.execute(select(Slot.id))
-    slot_ids = [r[0] for r in slots_res.all()]
     bookings_to_add = []
-    used_slots = set() 
+    users_result = await session.execute(select(User.id).where(User.role.in_(['student', 'lecturer'])))
+    user_ids = [u[0] for u in users_result.all()]
+    rooms_result = await session.execute(select(Room.id))
+    room_ids = [r[0] for r in rooms_result.all()]
+    slots_result = await session.execute(select(Slot.id))
+    slot_ids = [s[0] for s in slots_result.all()]
     today = date.today()
-    sources = ['manual', 'ai']
-    reasons = {
-        "student": ["Học nhóm đồ án", "Họp câu lạc bộ", "Tự học buổi tối", "Làm bài tập lớn"],
-        "lecturer": ["Giảng dạy bù", "Họp hội đồng bộ môn", "Hướng dẫn sinh viên nghiên cứu", "Tổ chức Seminar"]
-    }
-    for _ in range(50):
-        booking_date = today + timedelta(days=random.randint(-7, 7))
+    booked_slots = set()
+    for _ in range(200):
+        user_id = random.choice(user_ids)
         room_id = random.choice(room_ids)
         slot_id = random.choice(slot_ids)
-        unique_key = (room_id, slot_id, booking_date)
-        if unique_key in used_slots:
+        booked_date = today + timedelta(days = random.randint(0, 15))
+
+        # Những phòng được đặt sẽ bị bỏ qua
+        overlap_key = (room_id, slot_id, booked_date)
+        if overlap_key in booked_slots:
             continue
-        used_slots.add(unique_key)
-        user_id, user_role = random.choice(users_data)
-        source = random.choice(sources)
-        if booking_date < today:
-            status = random.choice(['completed', 'cancelled', 'rejected'])
-        else:
-            status = random.choice(['pending', 'approved'])
-        approved_by = None
+        booked_slots.add(overlap_key)
+        
+        source = random.choice(['manual', 'ai'])
+        if booked_date < today: status = random.choice(['completed', 'cancelled', 'rejected'])
+        else: status = random.choice(['pending', 'approved', 'cancelled'])
+        note = "Đặt phòng"
+        created_at = datetime.combine(booked_date - timedelta(days=random.randint(1, 3)), time(8, 0))
         approved_at = None
+        checked_in_at = None
+        cancelled_at = None
         if status in ['approved', 'completed']:
-            approved_by = random.choice(admin_ids)
-            approved_at = datetime.now() - timedelta(hours=random.randint(1, 24))
-        reason_text = random.choice(reasons.get(user_role, ["Sử dụng phòng học"]))
-        note_prefix = "AI gợi ý: " if source == "ai" else "Yêu cầu: "
-        note = f"{note_prefix}{reason_text}. {fake.sentence(nb_words=4)}"
-        bookings_to_add.append(
-            Booking(
-                user_id=user_id,
-                room_id=room_id,
-                slot_id=slot_id,
-                date=booking_date,
-                status=status,
-                source=source,
-                approved_by=approved_by,
-                approved_at=approved_at,
-                note=note,
-                created_at=datetime.now() - timedelta(days=2)
-            )
+            approved_at = created_at + timedelta(hours=random.randint(1, 5))
+            if status == 'completed':
+                checked_in_at = datetime.combine(booked_date, time(random.randint(7, 17), 0))
+        elif status == 'cancelled':
+            cancelled_at = created_at + timedelta(hours=random.randint(1, 24))
+        new_booking = Booking(
+            user_id = user_id,
+            room_id = room_id,
+            slot_id = slot_id,
+            date = booked_date,
+            source = source,
+            status = status,
+            note = note,
+            approved_at = approved_at,
+            checked_in_at = checked_in_at,
+            cancelled_at = cancelled_at,
+            created_at = created_at
         )
+        bookings_to_add.append(new_booking)
     session.add_all(bookings_to_add)
     await session.commit()
 async def seed_tickets(session):
     count = (await session.execute(select(func.count(Ticket.id)))).scalar()
     if count and count > 0:
-        print(f"Dữ liệu phòng đã tồn tại ({count} rooms). Bỏ qua bước seed.")
         return
-    users_res = await session.execute(select(User.id).where(User.role != 'admin'))
-    user_ids = [r[0] for r in users_res.all()]
-    bookings_res = await session.execute(select(Booking.id, Booking.room_id).limit(20))
-    bookings = bookings_res.all()
-    equips_res = await session.execute(select(Equipment.id, Equipment.name).limit(20))
-    equipments = equips_res.all()
     tickets_to_add = []
-    scenarios = [
-        {
-            "type": "equipment", 
-            "titles": ["Hỏng thiết bị", "Lỗi vận hành", "Cần bảo trì"],
-            "desc_templates": ["Thiết bị {item} có dấu hiệu {issue}. Đã thử khởi động lại nhưng không được.", "Yêu cầu kiểm tra gấp {item}."]
-        },
-        {
-            "type": "booking", 
-            "titles": ["Sự cố nhận phòng", "Trùng lịch phòng", "Cửa phòng bị khóa"],
-            "desc_templates": ["Mã đặt phòng {id} gặp lỗi. {issue}.", "Tôi đã đến phòng nhưng {issue}."]
-        },
-        {
-            "type": "system", 
-            "titles": ["Lỗi phần mềm", "Sự cố đăng nhập", "Lỗi kết nối"],
-            "desc_templates": ["Hệ thống báo lỗi {code}. {issue}.", "Ứng dụng bị crash khi tôi thực hiện {action}."]
-        },
-        {
-            "type": "ai_anomaly", 
-            "titles": ["Gợi ý AI sai", "Lỗi thuật toán", "AI không phản hồi"],
-            "desc_templates": ["AI gợi ý {wrong_thing} là không hợp lý.", "Kết quả phân tích từ AI {issue}."]
-        }
+    ticket_groups = [
+        {"quantity": 50, "type": "equipment", "titles": ["Máy chiếu không lên nguồn", "Điều hòa chảy nước", "Bàn bị gãy chân", "Loa rè không nghe rõ", "Máy tính bị màn hình xanh"], "description": "Thiết bị gặp vấn đề trong quá trình sử dụng, cần kỹ thuật kiểm tra.", "status": ["open", "in_progress", "resolved", "closed"], "days_back": (1, 10)},
+        {"quantity": 30, "type": "booking", "titles": ["Phòng chưa được dọn dẹp", "Cửa phòng bị khóa không vào được", "Thiếu ghế ngồi so với đăng ký", "Ổ cắm điện không có điện"], "description": "Phản ánh về tình trạng phòng học khi bắt đầu ca mượn.", "status": ["open", "resolved"], "days_back": (0, 5)}
     ]
-    statuses = ['open', 'in_progress', 'resolved', 'closed']
-    for i in range(30):
-        scenario = random.choice(scenarios)
-        status = random.choice(statuses)
-        user_id = random.choice(user_ids)
-        if scenario['type'] == 'equipment':
-            e_id, e_name = random.choice(equipments)
-            title = f"{random.choice(scenario['titles'])}: {e_name}"
-            issue = random.choice(["không lên nguồn", "kêu to", "chạy chập chờn", "bị mất tín hiệu"])
-            description = random.choice(scenario['desc_templates']).format(item=e_name, issue=issue)
-        elif scenario['type'] == 'booking' and bookings:
-            b_id, r_id = random.choice(bookings)
-            title = random.choice(scenario['titles'])
-            issue = random.choice(["thẻ từ không mở được cửa", "phòng đang có người khác sử dụng", "thiếu chìa khóa"])
-            description = random.choice(scenario['desc_templates']).format(id=f"BK-{b_id}", issue=issue)
-        elif scenario['type'] == 'system':
-            title = random.choice(scenario['titles'])
-            action = random.choice(["đặt phòng", "xem lịch học", "gửi báo cáo"])
-            code = random.choice(["500 Internal Server Error", "403 Forbidden", "Timeout"])
-            description = random.choice(scenario['desc_templates']).format(code=code, action=action, issue="không phản hồi")
-        else:
-            title = random.choice(scenario['titles'])
-            wrong_thing = random.choice(["phòng Lab cho tiết Thể dục", "tiết 12 cho sinh viên ở xa", "gợi ý bảo trì thiết bị đang mới"])
-            description = random.choice(scenario['desc_templates']).format(wrong_thing=wrong_thing, issue="bị sai lệch thông tin")
-        ticket_data = {
-            "user_id": user_id,
-            "title": f"{title} #{i+1}",
-            "description": f"{description} ({fake.sentence(nb_words=5)})",
-            "status": status,
-            "type": scenario['type'],
-            "resolved_at": datetime.now() if status in ['resolved', 'closed'] else None,
-            "created_at": datetime.now() - timedelta(days=random.randint(0, 5))
-        }
-        if scenario['type'] == 'equipment':
-            ticket_data["equipment_id"] = e_id
-        elif scenario['type'] == 'booking' and bookings:
-            ticket_data["booking_id"] = b_id
-            ticket_data["room_id"] = r_id
-        tickets_to_add.append(Ticket(**ticket_data))
+    users_result = await session.execute(select(User.id).where(User.role.in_(['student', 'lecturer'])))
+    user_ids = [u[0] for u in users_result.all()]
+    room_equipment_result = await session.execute(select(RoomEquipment.room_id, RoomEquipment.equipment_id))
+    room_equipment_ids = room_equipment_result.all()
+    bookings_result = await session.execute(select(Booking.id))
+    booking_ids = [b[0] for b in bookings_result.all()]
+    for group in ticket_groups:
+        for _ in range(group["quantity"]):
+            user_id = random.choice(user_ids)
+            room_id = None
+            equipment_id = None
+            booking_id = None
+            if group["type"] == "equipment" and room_equipment_ids: room_id, equipment_id = random.choice(room_equipment_ids)
+            elif group["type"] == "booking" and booking_ids: booking_id = random.choice(booking_ids)
+            title = f"{'Sự cố' if group['type'] == 'equipment' else 'Vấn đề'}: {random.choice(group['titles'])}"
+            type = group["type"]
+            status = random.choice(group["status"])
+            description = group["description"]
+            resolved_at = None
+            created_at = datetime.now() - timedelta(days=random.randint(*group["days_back"]))
+            if status in ["resolved", "closed"]: resolved_at = created_at + timedelta(hours=random.randint(2, 48))
+            tickets_to_add.append(Ticket(
+                user_id = user_id,
+                equipment_id = equipment_id,
+                room_id = room_id,
+                booking_id = booking_id,
+                title = title,
+                type = type,
+                status = status,
+                description = description,
+                resolved_at = resolved_at,
+                created_at = created_at
+            ))
     session.add_all(tickets_to_add)
     await session.commit()
 async def seed_ai_logs(session):
-    result = await session.execute(select(func.count(AILog.id)))
-    if result.scalar() > 0:
-        print("AI Logs already exist. Skipping...")
+    count = (await session.execute(select(func.count(AILog.id)))).scalar()
+    if count and count > 0:
         return
-    users_res = await session.execute(select(User.id))
-    user_ids = [r[0] for r in users_res.all()]
-    bookings_res = await session.execute(select(Booking.id))
-    booking_ids = [r[0] for r in bookings_res.all()]
     ai_logs_to_add = []
-    for i in range(40):
-        log_type = random.choice(["booking_parse", "booking_review", "chatbot", "anomaly_detect", "support"])
-        user_id = random.choice(user_ids)
-        status = random.choices(["success", "failed", "rejected"], weights=[70, 15, 15], k=1)[0]
-        input_text = ""
-        output_text = ""
-        booking_id = None
-        if log_type == "booking_parse":
-            room_type = random.choice(["Lab", "Phòng học", "Sân thể thao"])
-            day = random.choice(["thứ Hai", "thứ Ba", "mai", "cuối tuần này"])
-            input_text = f"Tôi muốn đặt {room_type} vào {day} cho {random.randint(5, 30)} người"
-            output_dict = {
-                "room_type": room_type.lower(),
-                "parsed_date": (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d"),
-                "slots": [random.randint(1, 4)],
-                "confidence": round(random.uniform(0.8, 0.99), 2)
-            }
-            output_text = json.dumps(output_dict, ensure_ascii=False)
-            booking_id = random.choice(booking_ids) if booking_ids else None
-        elif log_type == "booking_review":
-            input_text = f"Review booking ID BK-{random.randint(100, 999)} cho phòng {random.choice(['A', 'B', 'C'])}{random.randint(101, 505)}"
-            if status == "success":
-                output_text = "Approved: Yêu cầu hợp lệ và phù hợp với tiêu chuẩn sử dụng."
-            else:
-                output_text = f"Rejected: {random.choice(['Trùng lịch bảo trì thiết bị', 'Vượt quá hạn mức đặt phòng trong tuần', 'Phòng không đủ sức chứa'])}."
-            booking_id = random.choice(booking_ids) if booking_ids else None
-        elif log_type == "chatbot":
-            questions = [
-                "Làm thế nào để tôi hủy đặt phòng?",
-                "Quy định sử dụng máy chiếu là gì?",
-                "Phòng Lab B202 có những thiết bị nào?",
-                "Admin là ai vậy?"
-            ]
-            input_text = random.choice(questions)
-            output_text = f"{fake.sentence(nb_words=10)} Vui lòng liên hệ {fake.email()} nếu cần hỗ trợ thêm."
-        elif log_type == "anomaly_detect":
-            input_text = f"Check pattern for User {fake.bothify('???###').upper()}"
-            if status == "success":
-                output_text = "Không phát hiện dấu hiệu bất thường."
-            else:
-                output_text = f"Cảnh báo: Phát hiện {random.choice(['đăng nhập từ địa chỉ IP lạ', 'nhiều yêu cầu thất bại liên tiếp', 'truy cập ngoài giờ hành chính'])}."
-        else:
-            e_code = f"{random.choice(['PROJ', 'AC', 'COMP'])}-{random.randint(1, 50):03d}"
-            input_text = f"Thiết bị {e_code} gặp sự cố {random.choice(['không kết nối được', 'bị hỏng nút nguồn', 'chạy quá nóng'])}"
-            output_text = f"Đã tự động tạo Ticket #{random.randint(1000, 9999)} cho bộ phận kỹ thuật."
-        ai_logs_to_add.append(
-            AILog(
-                user_id=user_id,
-                booking_id=booking_id,
-                type=log_type,
-                input=input_text,
-                output=output_text,
-                status=status,
-                created_at=datetime.now() - timedelta(hours=random.randint(1, 100))
-            )
-        )
+    ai_groups = [
+        {"quantity": 40, "type": "natural_language_booking", "inputs": ["Đặt phòng Lab A tiết 1", "Tìm phòng trống sáng mai", "Hủy lịch đặt phòng P.302"], "outputs": ["Đã tìm thấy phòng phù hợp.", "Đặt phòng thành công!", "Lịch đã được hủy."], "status": ["success", "failed"], "days_back": (0, 30)},
+        {"quantity": 30, "type": "troubleshooting", "inputs": ["Tại sao máy chiếu không lên?", "Cách bật điều hòa?", "Loa phòng 201 bị rè"], "outputs": ["Kiểm tra dây nguồn máy chiếu.", "Dùng điều khiển treo tường.", "Đã ghi nhận sự cố loa."], "status": ["success", "escalated"], "days_back": (0, 30)},
+        {"quantity": 30, "type": "moderation", "inputs": ["Nội dung đặt phòng: 'Học nhóm'", "Báo cáo: 'Cửa bị hỏng'", "Input chứa từ ngữ thô tục"], "outputs": ["Nội dung hợp lệ.", "Duyệt an toàn.", "Cảnh báo: Vi phạm tiêu chuẩn nội dung."], "status": ["success", "flagged", "escalated"], "days_back": (0, 30)}
+    ]
+    users_result = await session.execute(select(User.id).where(User.role.in_(['student', 'lecturer'])))
+    user_ids = [u[0] for u in users_result.all()]
+    room_equipment_result = await session.execute(select(RoomEquipment.room_id, RoomEquipment.equipment_id))
+    room_equipment_ids = room_equipment_result.all()
+    bookings_result = await session.execute(select(Booking.id))
+    booking_ids = [b[0] for b in bookings_result.all()]
+    for group in ai_groups:
+        for _ in range(group["quantity"]):
+            user_id = random.choice(user_ids)
+            equipment_id = None
+            room_id = None
+            booking_id = None
+            if group["type"] == "troubleshooting" and room_equipment_ids: room_id, equipment_id = random.choice(room_equipment_ids)
+            elif group["type"] in ["natural_language_booking", "moderation"] and booking_ids:   booking_id = random.choice(booking_ids)
+            type = group["type"]
+            status = random.choice(group["status"])
+            input_text = random.choice(group["inputs"])
+            output_text = random.choice(group["outputs"])
+            metadata_json = {"confidence_score": round(random.uniform(0.85, 0.99), 2) if status == "success" else round(random.uniform(0.3, 0.7), 2)}
+            created_at = datetime.now() - timedelta(days=random.randint(*group["days_back"]))
+            ai_logs_to_add.append(AILog(
+                user_id = user_id,
+                room_id = room_id,
+                equipment_id = equipment_id,
+                booking_id = booking_id,
+                type = type,
+                status = status,
+                input_text = input_text,
+                output_text = output_text,
+                metadata_json = json.dumps(metadata_json),
+                created_at = created_at
+            ))
     session.add_all(ai_logs_to_add)
     await session.commit()
-async def main():
+
+async def seed_data():
     async with AsyncSessionLocal() as session:
         await seed_users(session)
         await seed_rooms(session)
         await seed_equipments(session)
-        await seed_room_equipments(session)
+        await seed_rooms_equipments(session)
         await seed_slots(session)
         await seed_bookings(session)
         await seed_tickets(session)
         await seed_ai_logs(session)
-    print("Done seeding!")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(seed_data())

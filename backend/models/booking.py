@@ -1,31 +1,29 @@
-from sqlalchemy import (Column, BigInteger, String, Date, DateTime, Text, ForeignKey, Index, UniqueConstraint, CheckConstraint, text)
+from sqlalchemy import Column, ForeignKey, CheckConstraint, UniqueConstraint, String, Text, text, Boolean, BigInteger, Integer, DateTime, Date, Time
+from sqlalchemy.sql import func
 from models.base import Base
 
 class Booking(Base):
     __tablename__ = "bookings"
     __table_args__ = (
-        UniqueConstraint("room_id", "slot_id", "date", name="uq_room_slot_date"),
-        Index("idx_booking_date", "date"),
-        Index("idx_booking_room_date", "room_id", "date"),
-        Index("idx_booking_user", "user_id"),
-        Index("idx_booking_status", "status"),
-        CheckConstraint("status IN ('pending', 'approved', 'rejected', 'cancelled', 'completed')", name="ck_booking_status"),
-        CheckConstraint("source IN ('manual', 'ai')", name="ck_booking_source"),
+        UniqueConstraint("room_id", "slot_id", "date", "cancelled_at", name="uc_bookings_room_slot_date_cancelled_at"),
+        CheckConstraint("date >= CURRENT_DATE", name="cc_bookings_date"),
+        CheckConstraint("source IN ('manual', 'ai')", name="cc_bookings_source"),
+        CheckConstraint("status IN ('pending', 'approved', 'rejected', 'cancelled', 'completed')", name="cc_bookings_status"),
+        CheckConstraint("approved_at >= created_at", name="cc_bookings_approved_at"),
+        CheckConstraint("checked_in_at >= approved_at", name="cc_bookings_checkin_at"),
+        CheckConstraint("cancelled_at >= created_at", name="cc_bookings_cancelled_at"),
     )
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    room_id = Column(BigInteger, ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False)
-    slot_id = Column(BigInteger, ForeignKey("slots.id", ondelete="CASCADE"), nullable=False)
+    id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    room_id = Column(BigInteger, ForeignKey("rooms.id"), nullable=False)
+    slot_id = Column(BigInteger, ForeignKey("slots.id"), nullable=False)
     date = Column(Date, nullable=False)
-    status = Column(String(30), nullable=False)
-    approved_by = Column(BigInteger, ForeignKey("users.id"), nullable=True)
+    source = Column(String(50), nullable=False)
+    status = Column(String(50), nullable=False, server_default=text("'pending'"))
+    note = Column(String(255), nullable=True)
     approved_at = Column(DateTime, nullable=True)
-    source = Column(String(20), nullable=False)
-    note = Column(Text, nullable=True)
     checked_in_at = Column(DateTime, nullable=True)
     cancelled_at = Column(DateTime, nullable=True)
-    cancelled_by = Column(BigInteger, ForeignKey("users.id"), nullable=True)
-    cancel_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"), onupdate=text("CURRENT_TIMESTAMP"))
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

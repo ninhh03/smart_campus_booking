@@ -2,3 +2,5 @@ fastapi[standard]
 sqlalchemy
 asyncpg
 dotenv
+alembic
+unicode

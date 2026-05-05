@@ -5,7 +5,7 @@ from models.base import Base
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     __table_args__ = (
-        CheckConstraint("ip_address ~ '^[0-9.]+$'", name="cc_user_sessions_ip_address"),
+        CheckConstraint("ip_address ~ '^[0-9a-fA-F.:]+$'", name="cc_user_sessions_ip_address"),
         CheckConstraint("expired_at > issued_at", name="cc_user_sessions_expired_at"),
         CheckConstraint("revoked_at >= issued_at", name="cc_user_sessions_revoked_at"),
     )

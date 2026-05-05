@@ -3,4 +3,7 @@ sqlalchemy
 asyncpg
 dotenv
 alembic
-unicode
+faker
+unidecode
+python-jose[cryptography]
+bcrypt
